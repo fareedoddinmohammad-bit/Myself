@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="hi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PayVoice Alert — Demo</title>
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; max-width:800px; margin:20px auto; padding:10px; }
+    h1{color:#1A73E8}
+    .card{border:1px solid #ddd; padding:16px; border-radius:8px; margin-bottom:12px;}
+    label {display:block; margin-top:8px; font-weight:600;}
+    input[type="text"], input[type="number"], textarea {width:100%; padding:10px; margin-top:6px; box-sizing:border-box;}
+    button {padding:10px 14px; margin-top:10px; cursor:pointer; border-radius:6px; border:none;}
+    .btn-primary{background:#1A73E8;color:#fff;}
+    .btn-secondary{background:#34A853;color:#fff;}
+    .row{display:flex;gap:10px;flex-wrap:wrap;}
+    .col{flex:1; min-width:200px;}
+    #qrPreview{max-width:100%; border:1px dashed #ccc; padding:6px; border-radius:6px;}
+    small.note{color:#666}
+  </style>
+  <!-- html5-qrcode CDN (for camera QR scanning) -->
+  <script src="https://unpkg.com/html5-qrcode@2.3.7/minified/html5-qrcode.min.js"></script>
+</head>
+<body>
+  <h1>PayVoice Alert — Demo (Free)</h1>
+
+  <div class="card">
+    <strong>QR Upload / Scan</strong>
+    <p class="note">QR image upload करो या नीचे कैमरा से scan करो (mobile पर काम करता है).</p>
+
+    <label>Upload QR image</label>
+    <input type="file" id="qrFile" accept="image/*">
+
+    <div style="margin-top:10px;">
+      <button id="startScan" class="btn-primary">Start Camera Scan</button>
+      <button id="stopScan" class="btn-secondary" style="display:none;background:#f39c12">Stop Scan</button>
+    </div>
+
+    <div id="camera" style="margin-top:12px;"></div>
+
+    <div style="margin-top:12px;">
+      <img id="qrPreview" src="" alt="QR Preview" />
+    </div>
+
+    <div id="qrResult" style="margin-top:8px;color:#0a0;font-weight:700"></div>
+  </div>
+
+  <div class="card">
+    <strong>Manual / Test Payment Input</strong>
+
+    <label>Sender Name</label>
+    <input type="text" id="payerName" placeholder="Raju Kumar">
+
+    <label>Amount (₹)</label>
+    <input type="number" id="amount" placeholder="150">
+
+    <div class="row" style="margin-top:12px;">
+      <div class="col">
+        <button id="speakEn" class="btn-primary">Speak English</button>
+      </div>
+      <div class="col">
+        <button id="speakHi" class="btn-secondary">Speak Hindi</button>
+      </div>
+      <div class="col">
+        <button id="simulate" style="background:#F9B000;color:#000;border-radius:6px">Simulate Payment</button>
+      </div>
+    </div>
+
+    <p><small class="note">Simulate Payment दबाने पर उसी browser/device से आवाज आएगी — वास्तविक UPI webhook के लिए server integration चाहिए होता है.</small></p>
+  </div>
+
+  <div class="card">
+    <strong>Log</strong>
+    <textarea id="log" rows="6" readonly></textarea>
+  </div>
+
+<script>
+  // Helpers
+  function log(msg){
+    const ta = document.getElementById('log');
+    ta.value = (new Date()).toLocaleTimeString() + " — " + msg + "\n" + ta.value;
+  }
+
+  // Text-to-Speech function
+  function speakText(text, lang){
+    if(!('speechSynthesis' in window)){
+      alert('Your browser does not support Speech Synthesis.');
+      return;
+    }
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = lang;
+    // Optional: voice selection fallback
+    const voices = speechSynthesis.getVoices();
+    // try to set a matching voice for language
+    for(const v of voices){
+      if(v.lang && v.lang.toLowerCase().startsWith(lang.split('-')[0])){
+        utter.voice = v;
+        break;
+      }
+    }
+    speechSynthesis.cancel(); // stop previous
+    speechSynthesis.speak(utter);
+    log("Spoken ("+lang+"): " + text);
+  }
+
+  // Buttons
+  document.getElementById('speakEn').addEventListener('click', () => {
+    const name = document.getElementById('payerName').value || 'Sender';
+    const amount = document.getElementById('amount').value || '0';
+    const msg = `You received rupees ${amount} from ${name}`;
+    speakText(msg, 'en-US');
+  });
+
+  document.getElementById('speakHi').addEventListener('click', () => {
+    const name = document.getElementById('payerName').value || 'Prerak';
+    const amount = document.getElementById('amount').value || '0';
+    const msg = `₹${amount} praapt hua ${name} se`;
+    speakText(msg, 'hi-IN');
+  });
+
+  document.getElementById('simulate').addEventListener('click', () => {
+    // On simulate we auto-speak in both languages (Hindi first, then English)
+    const name = document.getElementById('payerName').value || 'Sender';
+    const amount = document.getElementById('amount').value || '0';
+    const hmsg = `₹${amount} praapt hua ${name} se`;
+    const emsg = `You received rupees ${amount} from ${name}`;
+
+    // speak Hindi, then wait and speak English
+    speakText(hmsg, 'hi-IN');
+    setTimeout(()=> speakText(emsg, 'en-US'), 1400);
+    log("Simulated payment: ₹"+amount+" from "+name);
+  });
+
+  // QR file upload preview & (optional) decode using canvas + jsQR if available
+  const qrFile = document.getElementById('qrFile');
+  const qrPreview = document.getElementById('qrPreview');
+  const qrResult = document.getElementById('qrResult');
+
+  qrFile.addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    if(!f) return;
+    const url = URL.createObjectURL(f);
+    qrPreview.src = url;
+    qrResult.textContent = 'Image loaded.';
+
+    // Try to decode using html5-qrcode's scanFileV2 if available
+    try {
+      if(window.html5QrCode && html5QrCode.scanFileV2){
+        const result = await html5QrCode.scanFileV2(f, true);
+        if(result && result.decodedText){
+          qrResult.textContent = 'QR: ' + result.decodedText;
+          log('QR decoded: ' + result.decodedText);
+        }
+      }
+    } catch(err){
+      // ignore decode failure
+      log('QR decode failed: ' + err);
+    }
+  });
+
+  // Camera QR scanning using html5-qrcode
+  const startBtn = document.getElementById('startScan');
+  const stopBtn = document.getElementById('stopScan');
+  const cameraDiv = document.getElementById('camera');
+  let html5QrCode;
+
+  startBtn.addEventListener('click', async () => {
+    // create scanner if not exists
+    if(!window.Html5Qrcode){
+      alert('QR scanner library not available.');
+      return;
+    }
+    html5QrCode = new Html5Qrcode("camera");
+    startBtn.style.display = 'none';
+    stopBtn.style.display = 'inline-block';
+    try{
+      const config = { fps: 10, qrbox: {width: 250, height: 250} };
+      await html5QrCode.start(
+        { facingMode: "environment" },
+        config,
+        (decodedText, decodedResult) => {
+          // handle decode
+          qrResult.textContent = 'QR: ' + decodedText;
+          log('QR scanned: ' + decodedText);
+          // If QR contains a payload with name and amount (example format: name:XXX;amount:YYY)
+          // try to auto-fill inputs
+          try{
+            if(decodedText.includes('name') && decodedText.includes('amount')){
+              // simple parse
+              const parts = decodedText.split(/[;,&]/);
+              parts.forEach(p => {
+                const kv = p.split(':');
+                if(kv.length===2){
+                  const k = kv[0].trim().toLowerCase();
+                  const v = kv[1].trim();
+                  if(k==='name') document.getElementById('payerName').value = v;
+                  if(k==='amount') document.getElementById('amount').value = v;
+                }
+              });
+            }
+          }catch(e){}
+        },
+        (errorMessage) => {
+          // ignore scan failures
+        }
+      );
+      log('Camera scan started');
+    }catch(err){
+      alert('Camera start failed: ' + err);
+      startBtn.style.display = 'inline-block';
+      stopBtn.style.display = 'none';
+    }
+  });
+
+  stopBtn.addEventListener('click', async () => {
+    if(html5QrCode){
+      await html5QrCode.stop();
+      html5QrCode.clear();
+      cameraDiv.innerHTML = '';
+      stopBtn.style.display = 'none';
+      startBtn.style.display = 'inline-block';
+      log('Camera scan stopped');
+    }
+  });
+
+  // Ensure voices are loaded (some browsers require user gesture)
+  window.speechSynthesis.onvoiceschanged = function(){
+    log('Voices loaded: ' + speechSynthesis.getVoices().length);
+  };
+
+  // initial log
+  log('Page loaded. Use Upload or Start Camera. Then fill Name & Amount, then press Simulate or Speak buttons.');
+</script>
+</body>
+</html>
