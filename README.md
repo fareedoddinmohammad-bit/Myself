@@ -1,2 +1,2 @@
-# Myself
+Myself
 I am happy
